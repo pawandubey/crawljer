@@ -40,10 +40,9 @@
 (defn get-page-from-url
   [s]
   (let [page (http/get s)]
-    (if (is-html? page)
-      (do
-        (async/put! docs-chan (:body page))
-        page))))
+    (when (is-html? page)
+      (async/put! docs-chan (:body page))
+      page)))
 
 (defn get-urls-from-page
   [page]
@@ -52,7 +51,7 @@
       (->> (parser/select snippet [:a])
            (map #(:href (:attrs %)))
            (map #((re-find url-pattern %) 2))
-           (filter valid-url?)))))
+           (#(vec (filter valid-url? %)))))))
 
 (defn read-url
   []
@@ -100,5 +99,3 @@
   "
   [coll s]
   (process-urls coll))
-
-(start ["http://pawandubey.com"] " ")
