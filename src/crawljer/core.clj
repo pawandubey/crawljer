@@ -2,11 +2,14 @@
   (:require [clojure.core.async :as async]
             [clj-http.client :as client]
             [net.cgrand.enlive-html :as parser]
-            [clj-http.client :as http]))
+            [clj-http.client :as http]
+            [clojure.java.io :as io]
+            [me.raynes.fs :as fs]))
 
 ;; Channels for the URLs and the DOCs retrieved from thos URLs
 (def urls-chan (async/chan Integer/MAX_VALUE))
 (def docs-chan (async/chan Integer/MAX_VALUE))
+(def ^:dynamic *folder* (System/getProperty "user.home"))
 
 ;; URL pattern to extract URLs from hrefs
 (def url-pattern #"([\\]+\")?(((?!\\+).)*)([\\]+\")?")
@@ -35,7 +38,8 @@
 ;; Add all URLs to urls-chan
 (defn add-urls-to-chan
   [coll]
-  (map add-url coll))
+  (doall (map add-url coll))
+  true)
 
 (defn get-page-from-url
   [s]
@@ -54,30 +58,44 @@
            (#(vec (filter valid-url? %)))))))
 
 (defn read-url
-  []
-  (let [current-url (async/<! urls-chan)]
-    (-> current-url
-        (get-page-from-url)
-        (get-urls-from-page)
-        (add-urls-to-chan))))
+  [current-url]
+  (-> current-url
+      (get-page-from-url)
+      (get-urls-from-page)
+      (add-urls-to-chan)))
 
 (defn read-urls
   []
-  (async/go-loop []
-    (when read-url
-      (recur))))
+  (async/go-loop [current-url (async/<! urls-chan)]
+    (when (read-url current-url)
+      (recur (async/<! urls-chan)))))
+
+(defn get-filename-from-url
+  [s]
+  (->> s
+       (#(clojure.string/split % #"/"))
+       (last)))
+
+(defn get-prefixed-name-from-filename
+  [s]
+  (clojure.string/join "/" [*folder* s]))
 
 (defn write-doc
-  []
-  (println (async/<! docs-chan))
-  true
-  )
+  [h]
+  (-> h
+       (#(% :trace-redirects))
+       (first)
+       (get-filename-from-url)
+       (get-prefixed-name-from-filename)
+       (fs/normalized)
+       (#(spit % (h :body))))
+  true)
 
 (defn write-docs
   []
-  (async/go-loop []
-    (when write-doc
-      (recur))))
+  (async/go-loop [doc (async/<! docs-chan)]
+    (when (write-doc doc)
+      (recur (async/<! docs-chan)))))
 
 ;; Starts the crawl
 (defn crawl
@@ -89,8 +107,17 @@
 (defn process-urls
   "Process the urls in the urls-chan"
   [coll]
-  (add-urls-to-chan coll)
-  (crawl))
+  (crawl)
+  (add-urls-to-chan coll))
+
+;; create directory tree given a path
+(defn create-directory
+  [s]
+  (let [dir s]
+    (when-not (fs/exists? dir)
+      (fs/mkdirs dir)
+      (def ^:dynamic *folder* s)
+      dir)))
 
 (defn start
   "Crawls the given vector of urls and saves the documents in the given path
@@ -98,4 +125,10 @@
   - s : the path to write to
   "
   [coll s]
+  (create-directory s)
   (process-urls coll))
+
+(defn -main
+  [& args]
+  (println "hello world")
+  (start ["http://example.com"] "/home/pawandubey/crawljer"))
